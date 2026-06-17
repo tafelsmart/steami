@@ -2,17 +2,21 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
+    <title>Steam Manifest Terminal</title>
     <style>
         body { background: #0a0a0a; color: #00ff41; font-family: 'Courier New', monospace; padding: 20px; }
-        textarea { width: 100%; height: 150px; background: #1a1a1a; color: #00ff41; border: 1px solid #00ff41; padding: 10px; }
-        button { background: #00ff41; color: #0a0a0a; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; margin-top: 10px; }
-        #log { margin-top: 20px; border-top: 1px solid #333; padding-top: 10px; }
+        textarea { width: 100%; height: 150px; background: #1a1a1a; color: #00ff41; border: 1px solid #00ff41; padding: 10px; font-family: 'Courier New', monospace; }
+        button { background: #00ff41; color: #0a0a0a; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; margin-top: 10px; font-family: 'Courier New', monospace; }
+        #log { margin-top: 20px; border-top: 1px solid #333; padding-top: 10px; max-height: 400px; overflow-y: auto; }
+        .ok { color: #00ff41; }
+        .warn { color: #ffb300; }
+        .err { color: #ff3333; }
     </style>
 </head>
 <body>
-    <h1>> STEAM_MANIFEST_TERMINAL_V1.0</h1>
-    <p>Gebe AppIDs ein (durch Komma oder Zeilenumbruch getrennt):</p>
-    <textarea id="inputIds" placeholder="z.B. 440, 730, 570..."></textarea>
+    <h1>> STEAM_MANIFEST_TERMINAL_V1.1</h1>
+    <p>Gebe AppIDs oder DepotIDs ein (durch Komma, Leerzeichen oder Zeilenumbruch getrennt):</p>
+    <textarea id="inputIds" placeholder="z.B. 1205040 (Sucht automatisch alle zugehörigen Depots)..."></textarea>
     <br>
     <button onclick="processBulk()">[ BATCH_EXECUTE ]</button>
     <div id="log"></div>
@@ -21,11 +25,12 @@
     <script>
         async function processBulk() {
             const log = document.getElementById('log');
-            log.innerHTML = "> Starte Batch-Prozess...<br>";
+            log.innerHTML = "> Starte Scan- und Batch-Prozess...<br>";
             
             const rawInput = document.getElementById('inputIds').value;
-            const ids = [...new Set(rawInput.split(/[\s,]+/))].filter(Boolean);
+            const inputIds = [...new Set(rawInput.split(/[\s,]+/))].filter(Boolean);
             
+            log.innerHTML += "> Lade Datenbanken...<br>";
             const [manifests, depotKeys] = await Promise.all([
                 fetch('appaccesstokens.json').then(r => r.json()),
                 fetch('depotkeys.json').then(r => r.json())
@@ -34,25 +39,51 @@
             const zip = new JSZip();
             let count = 0;
 
-            for (const id of ids) {
-                if (manifests[id]) {
-                    const content = `local manifest = "${manifests[id]}"\nlocal key = "${depotKeys[id] || 'NOT_FOUND'}"`;
-                    zip.file(`config_${id}.lua`, content);
-                    log.innerHTML += `> [OK] AppID ${id} geladen.<br>`;
+            // Alle verfügbaren Depot-IDs aus der JSON holen
+            const allDepotIds = Object.keys(manifests);
+
+            for (const inputId of inputIds) {
+                log.innerHTML += `> Verarbeite Eingabe: ${inputId}...<br>`;
+                
+                // 1. Direktes Match (Falls du direkt eine DepotID eingegeben hast)
+                if (manifests[inputId]) {
+                    addFileToZip(zip, inputId, manifests[inputId], depotKeys[inputId]);
+                    log.innerHTML += `<span class="ok">> [OK] DepotID ${inputId} direkt gefunden.</span><br>`;
                     count++;
-                } else {
-                    log.innerHTML += `> [ERROR] AppID ${id} nicht gefunden.<br>`;
+                } 
+                // 2. AppID-Match (Sucht alle Depots, die mit der ID beginnen, z.B. 1205041 für App 1205040)
+                else {
+                    const relatedDepots = allDepotIds.filter(depotId => depotId.startsWith(inputId.substring(0, 6)));
+                    
+                    if (relatedDepots.length > 0) {
+                        log.innerHTML += `> [INFO] AppID erkannt. Gefundene Depots: ${relatedDepots.join(', ')}<br>`;
+                        for (const depotId of relatedDepots) {
+                            addFileToZip(zip, depotId, manifests[depotId], depotKeys[depotId]);
+                            log.innerHTML += `<span class="ok">> [OK] Zugehöriges Depot ${depotId} exportiert.</span><br>`;
+                            count++;
+                        }
+                    } else {
+                        log.innerHTML += `<span class="err">> [ERROR] Weder DepotID noch AppID für '${inputId}' in den Daten gefunden.</span><br>`;
+                    }
                 }
             }
 
             if (count > 0) {
+                log.innerHTML += "> Generiere ZIP-Archiv... Bitte warten.<br>";
                 const blob = await zip.generateAsync({type:"blob"});
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = "manifests_bundle.zip";
+                link.download = "steam_manifests_bundle.zip";
                 link.click();
-                log.innerHTML += `> [FINISH] ${count} Dateien komprimiert und bereitgestellt.`;
+                log.innerHTML += `<span class="ok">> [FINISH] Erfolgreich! ${count} Lua-Dateien heruntergeladen.</span>`;
+            } else {
+                log.innerHTML += `<span class="err">> [ABORT] Keine passenden Daten zum Download gefunden.</span>`;
             }
+        }
+
+        function addFileToZip(zip, id, manifest, key) {
+            const content = `local manifest = "${manifest}"\nlocal key = "${key || 'NOT_FOUND'}"`;
+            zip.file(`config_${id}.lua`, content);
         }
     </script>
 </body>
