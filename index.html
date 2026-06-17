@@ -18,16 +18,17 @@
     </style>
 </head>
 <body>
-    <h1>> STEAM_MANIFEST_MASTER_TERMINAL_V2.1</h1>
+    <h1>> STEAM_MANIFEST_MASTER_TERMINAL_V2.2</h1>
     
     <div class="config-box">
         <h3>[ AUTH_KONFIGURATION ]</h3>
         <label>API KEY (Von manifesthub1.filegear-sg.me):</label>
-        <input type="text" id="apiKey" placeholder="314aa7fbedbf9d1aa6d793743b705e9cb5ac8c6f028c380a4b2cff65526564b2d045b5272107">
+        <!-- FIX: 'value' statt 'placeholder' genutzt, damit der Key aktiv verwendet wird -->
+        <input type="text" id="apiKey" value="314aa7fbedbf9d1aa6d793743b705e9cb5ac8c6f028c380a4b2cff65526564b2d045b5272107">
     </div>
 
     <p>Gib die IDs ein (AppIDs oder DepotIDs, getrennt durch Komma, Leerzeichen oder Zeile):</p>
-    <textarea id="inputIds" placeholder="Beispiel: 1205040, 766, 17770..."></textarea>
+    <textarea id="inputIds" placeholder="Beispiel: 1205041, 1205042, 766..."></textarea>
     <br>
     <button onclick="starteBatchProzess()">[ BATCH_PROZESS_STARTEN ]</button>
     
@@ -45,7 +46,6 @@
                 return;
             }
 
-            // IDs säubern und Duplikate entfernen
             const eingabeIds = [...new Set(rawInput.split(/[\s,]+/))].filter(Boolean);
             if (eingabeIds.length === 0) {
                 log.innerHTML = "<span class='err'>> [ABORT] Abbruch: Keine IDs im Textfeld gefunden.</span>";
@@ -53,21 +53,19 @@
             }
 
             log.innerHTML = `> [INIT] Starte System-Scan...<br>`;
-            
-            // Versuche die lokalen Datenbanken zu laden
             log.innerHTML += `> Lade lokale JSON-Dateien...<br>`;
+            
             let manifests = {}, depotKeys = {};
             try {
-                // Erwende Kleinschreibung, da Linux-Server (GitHub) case-sensitive sind
                 const resTokens = await fetch('appaccesstokens.json');
                 const resKeys = await fetch('depotkeys.json');
                 
                 if (resTokens.ok) manifests = await resTokens.json();
                 if (resKeys.ok) depotKeys = await resKeys.json();
                 
-                log.innerHTML += "<span class='ok'>> [INFO] Lokale Datenbanken geladen (sofern vorhanden).</span><br>";
+                log.innerHTML += "<span class='ok'>> [INFO] Lokale Datenbanken erfolgreich geladen.</span><br>";
             } catch(e) {
-                log.innerHTML += "<span class='info'>> [HINWEIS] Lokale JSONs nicht gefunden oder fehlerhaft. Nutze reinen API-Modus.</span><br>";
+                log.innerHTML += "<span class='info'>> [HINWEIS] Lokale JSONs nicht gefunden. Nutze reinen API-Modus.</span><br>";
             }
 
             const zip = new JSZip();
@@ -76,15 +74,14 @@
 
             for (const id of eingabeIds) {
                 log.innerHTML += `<br>> Verarbeite ID: <b style="color:#fff">${id}</b>...<br>`;
-                
                 let gefundeneDepots = [];
 
-                // 1. SCHRITT: Prüfen, ob es eine exakte DepotID in deiner JSON ist
+                // 1. Exakte DepotID lokal vorhanden
                 if (manifests[id]) {
                     gefundeneDepots.push({ depotId: id, manifestId: manifests[id] });
                 } 
-                // 2. SCHRITT: Wenn nicht, schauen, ob es eine AppID ist (prüft, ob lokale Depots damit beginnen)
-                else {
+                // 2. Lokaler Scan nach Präfix (falls AppID eingegeben wurde)
+                else if (alleLokalenDepotIds.length > 0) {
                     const prefix = id.substring(0, Math.min(id.length, 5));
                     const passendeZugehoerige = alleLokalenDepotIds.filter(dId => dId.startsWith(prefix));
                     
@@ -93,16 +90,14 @@
                     }
                 }
 
-                // 3. SCHRITT: Wenn lokal gar nichts existiert (wie bei 1205040), fügen wir die ID direkt für die API hinzu
+                // 3. Fallback: Wenn lokal nichts matcht, versuchen wir das Depot direkt online abzufragen
                 if (gefundeneDepots.length === 0) {
                     gefundeneDepots.push({ depotId: id, manifestId: "" });
                 }
 
-                // Jetzt für jedes gefundene oder vermutete Depot die API abfragen
                 for (const depot of gefundeneDepots) {
-                    log.innerHTML += `> Rufe ManifestHub API für Depot ${depot.depotId} ab...<br>`;
+                    log.innerHTML += `> Rufe ManifestHub API für ID ${depot.depotId} ab...<br>`;
                     
-                    // Erstelle den API-Link laut deiner Dokumentation
                     let url = `https://api.manifesthub1.filegear-sg.me/manifest?apikey=${apiKey}&depotid=${depot.depotId}`;
                     if (depot.manifestId) {
                         url += `&manifestid=${depot.manifestId}`;
@@ -113,18 +108,15 @@
                         
                         if (antwort.ok) {
                             const datenText = await antwort.text();
-                            
-                            // Holt den Key aus deiner lokalen depotkeys.json (falls vorhanden), ansonsten 'ONLINE_API'
                             const lokalerKey = depotKeys[depot.depotId] || "ONLINE_API";
 
-                            // Generiert sauberen Lua-Code
                             const luaInhalt = `local depotId = "${depot.depotId}"\nlocal key = "${lokalerKey}"\nlocal manifestData = [==[\n${datenText}\n]==]\nreturn { depotId = depotId, key = key, data = manifestData }`;
                             
                             zip.file(`config_${depot.depotId}.lua`, luaInhalt);
-                            log.innerHTML += `<span class='ok'>> [OK] Depot ${depot.depotId} erfolgreich vom Server geladen!</span><br>`;
+                            log.innerHTML += `<span class='ok'>> [OK] ID ${depot.depotId} erfolgreich vom API-Server geladen!</span><br>`;
                             erfolgsCount++;
                         } else {
-                            log.innerHTML += `<span class='err'>> [FEHLER] Server verweigert Zugriff für ID ${depot.depotId} (Status: ${antwort.status}). Key abgelaufen?</span><br>`;
+                            log.innerHTML += `<span class='err'>> [FEHLER] Server verweigert Zugriff für ID ${depot.depotId} (Status: ${antwort.status}). Key abgelaufen oder ID ungültig?</span><br>`;
                         }
                     } catch (err) {
                         log.innerHTML += `<span class='err'>> [NETZWERK FEHLER] Verbindung zu ManifestHub fehlgeschlagen.</span><br>`;
@@ -132,7 +124,6 @@
                 }
             }
 
-            // ZIP-Datei an den User ausgeben
             if (erfolgsCount > 0) {
                 log.innerHTML += "<br>> Generiere ZIP-Archiv... Bitte warten...<br>";
                 const blob = await zip.generateAsync({type:"blob"});
@@ -140,9 +131,9 @@
                 link.href = URL.createObjectURL(blob);
                 link.download = `steam_manifests_master_${Date.now()}.zip`;
                 link.click();
-                log.innerHTML += `<span class='ok'>> [FINISH] Erfolgreich! ${erfolgsCount} Lua-Dateien heruntergeladen und im ZIP verpackt.</span>`;
+                log.innerHTML += `<span class='ok'>> [FINISH] Erfolgreich! ${erfolgsCount} Lua-Dateien im ZIP verpackt.</span>`;
             } else {
-                log.innerHTML += "<br><span class='err'>> [ABBRUCH] Es konnten keine Manifeste aus der API geladen werden. Überprüfe deinen Key!</span>";
+                log.innerHTML += "<br><span class='err'>> [ABBRUCH] Keine Manifeste über die API erhalten. Überprüfe deinen Key oder die IDs!</span>";
             }
         }
     </script>
